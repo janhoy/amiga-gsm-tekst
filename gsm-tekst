@@ -1,0 +1,380 @@
+/****************************************************************/
+/* $VER: GSM-tekst 2.3 (01.07.97/00:00:00/Arexx) ©93-97
+ * 19©93-97 Jan Høydahl - CHIPS productions                     */
+/* Program for å sende GSM-tekstmeldinger til Telenor mobil     */
+/* sitt nett.                                                   */
+/*                                                              */
+/* Laget av Jan Høydahl {INVENTOR}                              */
+/*                                                              */
+/* Sett tabulator til 4 når du leser/redigerer dette programmet */
+/****************************************************************/
+
+/*********************************************************/
+/* Variabeldeklarasjoner som kan endres av bruker        */
+/*********************************************************/
+
+editor        = "ed -sticky"
+mottakere     = "Comm:GSM-tekst/Mottakere"
+meldinger     = "Comm:GSM-tekst/Meldinger"
+menynavn      = "GSM-tekst"
+kvittadr      = ""
+
+starteditor   = "ed -r"		/* For å unngå bug i CED første gang */
+                            /* den startes. Sett denne til "" hvis */
+                            /* du ikke bruker CED */
+
+
+
+
+
+
+
+/*********************************************************/
+/* Programmet                                            */
+/*********************************************************/
+
+options results	/* Kjekt å ha, får nok bruk for det en vakker dag */
+
+address 'ncomm'
+
+feilgrense    = 3
+maxtegn       = 160
+lf            = '0A'X
+
+/******************************************/
+/* Her starter initialisering m.m.        */
+/******************************************/
+
+setcharset "NO7"		/* De bruker visst det */
+message '0C'X'1B'X"[0;31mGSM-tekst v2.3"'0A'X
+message "Arexx-Script for sending av GSM-tekst meldinger."'0A'X
+message "© 1993-1997 Jan Høydahl, CHIPS Software."
+message '1B'X"[0m"'0A'X'0A'X
+message "Avansert modus: Du får full kontroll over alle parametre."'0A'X
+message "Forenklet modus: Standardinnstillinger brukes."'0A'X'0A'X
+
+/**************************************************************/
+/* Her begynner vi innhenting av informasjon.                 */
+/**************************************************************/
+Twogadreq "Forenklet modus (standardverdier)?"
+IF RC = 1 THEN avansert = "Ja"
+ELSE avansert = "Nei"
+
+simplereq "Velg mottaker fra listen eller skriv inn nytt navn manuelt."
+filereq mottakere
+mottakerfil = result
+IF mottakerfil = "RESULT" THEN DO
+	message "Program avbrutt..."'0A'X
+	Call Avslutt
+END
+mottakernavn = substr(mottakerfil,lastpos('/',mottakerfil)+1)
+bool = open('mot',mottakerfil,'R')
+IF bool = 0 THEN DO
+	Stringreq "Registrering av "mottakernavn". Skriv mobilnummer."
+	mottaker = result
+	IF RC = 0 THEN DO
+		mottaker = result
+		call open('mot2',mottakerfil,'W')
+		writech('mot2',mottaker)
+		call close('mot2')
+	END
+	ELSE mottaker = ""
+END
+ELSE DO
+	mott = readln('mot')			/* Hent nummer fra fila */
+	mottaker = mott
+	call close('mot')				/* Best å rydde opp... */
+END
+
+IF mottaker = "" THEN DO
+	simplereq "Mottaker ugyldig"
+	call Avslutt
+END
+
+kvittype = "0"	/* Predeklarasjon :-) */
+typemott = ""
+gyldignet = ""
+senere = ""
+
+IF avansert = "Ja" THEN DO
+	Twogadreq "'Yes' for å utelate kvittering, 'No' for å motta sendekvittering"
+	IF RC = 1 then DO	/* Svarte nei */
+ 		simplereq "Kvitteringsadressen er hvem (GSM-nummer) som evt skal motta kvittering."
+		stringreq "Kvitt.adresse. Std=\u"
+		if RC = 0 THEN kvittadr = result
+		ELSE kvittadr = "\u"
+		
+		if kvittadr ~= "" THEN DO
+			simplereq "Du kan nå angi type kvittering, som angitt i neste boks:"
+			simplereq "0=Ingen 1=Vellykket 2=Mislykket 3=Lagret 4=1&3 5=2&3 6=1&2 7=Alle"
+			stringreq "Kvitteringstype (1-7) Std=7"
+			if RC = 0 THEN kvittype = result
+			ELSE kvittype = "7"
+	
+			stringreq "Type mottaker for kvittering (1=GSM) Std=1"
+			if RC = 0 THEN typemott = result
+			ELSE typemott = "1"
+		END
+	END
+
+	stringreq "Gyldighetstid melding (timer). Std=72"
+	IF RC = 0 THEN gyldighet = result
+	ELSE gyldighet = ""
+	IF gyldighet > 168 THEN DO
+		message "Advarsel: For lang gyldighetstid"'0A'X
+		gyldighet = ""
+	END
+
+	Twogadreq "Skal meldingen leveres med en gang? ('No' = spesifiser tidspunkt)"
+	IF RC ~= 0 THEN DO
+		stringreq "Senere levering (MM:DD:hh:mm)"
+		IF RC = 0 THEN senere = result
+		ELSE senere = ""
+	END
+
+	twogadreq "'Yes' - redigere ny/lagret melding. 'No' - sende lagret melding."
+END
+ELSE DO /* ikke avansert */
+	IF length("\u") > 2 THEN
+		kvittadr = "\u"
+		kvittype = "7"
+		typemott = "1"
+	ENDIF
+	gyldighet = ""
+	senere = ""
+	RC = 0
+END
+
+tell = feilgrense						/* Antall forsøk før avbryt */
+result = "RESULT"
+IF RC = 0 THEN
+DO										/* Bruker har valgt 'Yes' */
+	DO FOR tell WHILE result = "RESULT"
+		simplereq "Tips: Bruk filnavn som er lett assosierbare med innholdet."'0A'X
+		filereq meldinger
+		filnavn = result
+	END
+
+	IF filnavn = "RESULT" THEN DO
+		message "For mange feil! avbryter!!!"'0A'X
+		call Avslutt
+	END
+	Simplereq "Rediger teksten. (Kan evt være > "maxtegn" lang). Linjeskift = SPACE"
+	IF starteditor ~= "" THEN
+		cli starteditor		/* Fyrer opp editor for å forberede sticky */
+	cli editor '22'X || filnavn || '22'X		/* Kaller opp editoren */
+END
+ELSE
+DO FOR tell WHILE result = "RESULT"		/* Bruker har valgt 'No' */
+	simplereq "Velg en lagret melding"'0A'X
+	filereq meldinger
+	filnavn = result
+END
+
+ncommtofront
+
+IF filnavn = "RESULT" then DO
+	message "For mange feil! avbryter!!!"'0A'X
+	call Avslutt
+END
+
+/***************************************************/
+/* Lag til strengen som skal sendes. (hovedjobben) */
+/***************************************************/
+bool = open('innfil',filnavn,'R')
+IF bool = 0 THEN DO
+	simplereq "Fil ikke funnet, avslutter!"
+	call Avslutt
+END
+
+ut = ""							/* En slags initialisering */
+message '1b'X"[32m"				/* Rød (det kan jo variere da..) */
+DO FOREVER						/* Dvs helt til EOF */
+	inn = readch('innfil',1)	/* Hent ett og ett tegn */
+	slutt = EOF('innfil')		/* Sjekk om vi er på slutten */
+	IF slutt = 1 THEN BREAK	  	/* Hopp ut av loopen */
+	if C2D(inn) = 10 THEN inn = " "
+	ut = ut || inn
+	message inn
+END 										/* do for tell */
+message '1B'X"[0m"'0A'X'0A'X				/* Normal farge */
+originalmelding = ut						/* Spare på */
+
+/***************************************************/
+/* Hvis meldingen er over maxtegn får man valget.  */
+/***************************************************/
+lengde = length(ut)
+
+IF lengde > maxtegn THEN DO
+	message '1B'X"[35mMeldingen er mer enn "maxtegn" tegn lang!"'0A'X
+	message "Du kan enten avbryte for så å redigere ned meldingen,"'0A'X
+	message "eller du kan velge å la GSM-tekst sende beskjeden over to meldinger."'0A'X
+	IF lengde > (maxtegn * 2) THEN DO
+		message "Advarsel: "lengde - (maxtegn * 2)" tegn vil da ikke bli sendt!"'0A'X
+		ut = left(ut,maxtegn * 2)
+    END
+    message '0A1B'X"[0m"
+
+	beep
+	Twogadreq "'Yes' = send beskjeden over to meldinger. 'No' = Slutt"
+	IF RC = 1 then DO	/* Svarte nei */
+		Twogadreq "Svar 'Yes' hvis du vil å beholde meldingen til senere. 'No' = slett"
+		IF RC = 1 then DO	/* Svarte nei */
+			CLI 'delete' '22'X || filnavn || '22'X
+		END /* if */
+		call Avslutt
+	END /* if */
+	ELSE DO
+		sisteord = lastpos(" ",ut,maxtegn)
+		melding = left(ut,sisteord-1)
+		ut = substr(ut,sisteord+1)
+	END	
+END
+ELSE melding = ut				/* Det som sendes */
+call close('innfil')			/* Best å rydde opp... */
+
+/********************************************************************/
+/* Ferdig med konverteringen - gir brukeren anledning til å avbryte */
+/********************************************************************/
+twogadreq "'Yes' - send meldingen til "mottakernavn", 'No' - avslutte."
+IF RC = 1 then DO
+	message '0A'X"Du har valgt å avbryte. Hvis du fremdeles vil sende"'0A'X
+	message "meldingen, start på nytt og velg samme fil en gang til."'0A'X
+	Twogadreq "Svar 'Yes' hvis du vil å beholde meldingen til senere. 'No' = slett"
+	IF RC = 1 then DO	/* Svarte nei */
+trace r
+		CLI 'delete' '22'X || filnavn || '22'X
+trace o
+	END /* if */
+	call Avslutt
+END /* if */
+
+clearbuffer
+
+dial menynavn	/* Ringer opp */
+
+/*************************************************/
+/* Sender meldingen.                             */
+/*************************************************/
+
+inactivity 5
+send "2\n"					/* VT52 */
+wait "Avsenderadresse"
+send "\u\n"					/* Lagt til 13.12.95 */
+wait "Velg alternativ:"
+send "1\n"					/* Send melding i hovedmeny */
+
+IF kvittype ~= "7" THEN DO	/* 7 = Default... */
+	wait "Velg alternativ:"
+	send "1\n"					/* Kvitteringstype */
+	wait "Kvitteringstype"
+	send kvittype"\n"
+END
+
+IF kvittadr ~= "" THEN DO
+	wait "Velg alternativ:"
+	send "2\n"					/* Kvitteringsadresse */
+	wait "Kvitteringsadresse"
+	send kvittadr"\n"
+END
+
+IF typemott ~= "" THEN DO
+	wait "Velg alternativ:"
+	send "3\n"					/* Type mottaker for kvittering */
+	wait "Type mottaker for kvittering"
+	send typemott"\n"
+END
+
+IF gyldighet ~= "" THEN DO
+	wait "Velg alternativ:"
+	send "4\n"					/* Gyldighet */
+	wait "Gyldighetstid"
+	send gyldighet"\n"
+END
+
+IF mottaker ~= "" THEN DO
+	wait "Velg alternativ:"
+	send "5\n"					/* Mottaker */
+	wait "Mottakeradresse"
+	send mottaker"\n"
+END
+
+IF senere ~= "" THEN DO
+	wait "Velg alternativ:"
+	send "6\n"					/* Senere lev. */
+	wait "Senere levering"
+	send senere"\n"
+END
+
+wait "Velg alternativ:"
+send "7\n"					/* Skriv melding */
+
+wait "Avslutt med <Enter>:"
+send melding
+send "\n"					/* Sender LF */
+
+wait "Velg alternativ:"
+send "8\n"
+wait "Send melding(Maks 2 pr oppkobling) <J, N>:"
+send "j\n"
+wait "Trykk <Enter> for å fortsette"
+send "\n"
+DO FOREVER
+	IF length(ut) ~= length(melding) THEN DO	/* Sender over flere mld */
+		lengde = length(ut)
+		IF lengde > maxtegn THEN DO
+			sisteord = lastpos(" ",ut,maxtegn)
+			melding = left(ut,sisteord-1)
+			ut = substr(ut,sisteord+1)
+		END
+		ELSE melding = ut
+	
+		wait "Velg alternativ:"
+		send "7\n"						/* Skriv melding */
+		
+		wait "Avslutt med <Enter>:"
+		send melding'0A'X				/* Sender LF */
+		
+		wait "Velg alternativ:"
+		send "8\n"
+		wait "Send melding <J, N>:"
+		send "j\n"
+		wait "Trykk <Enter> for å fortsette"
+		send "\n"
+	END
+	ELSE BREAK	/* Ferdig */
+END
+
+wait "Velg alternativ"
+send "^Z"
+wait "Velg alternativ:"
+send "^Z"
+wait "Kople ned forbindelsen"
+dtenths 5
+send "j\n"
+
+dtenths 10
+hangup
+message "Oppringing ferdig!"'0A'X
+message "Du sendte følgende melding til "mottakernavn" ("mottaker"):"'0A'X
+message '1B'X"[32m"
+linjer = (length(originalmelding)%70)+1
+tell = 0
+DO FOR linjer
+	message substr(originalmelding,(tell*70+1),70) || '0A'X
+	tell = tell + 1
+END
+message '1B'X"[0m"'0A'X'0A'X
+Twogadreq "Svar 'Yes' hvis du vil å beholde meldingen til senere. 'No' = slett"
+IF RC = 1 then DO	/* Svarte nei */
+	CLI 'delete' '22'X || filnavn || '22'X
+END /* if */
+
+/*******************************/
+/* Rensker opp og avslutter.   */
+/*******************************/
+Avslutt:
+DO
+	message "Takk for at du brukte GSM-tekst!"'0A'X
+	EXIT
+END
